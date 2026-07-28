@@ -331,3 +331,29 @@ export circuit commitSubmission(
   receiptCommitments.insert(mandateId, receiptCommitment);
   mandateStates.insert(mandateId, MandateState.SUBMITTED);
 }
+
+// ----------------------------------------------------------------------------
+// Evaluation module — evaluator-authorized verdict on a submission
+// ----------------------------------------------------------------------------
+
+export circuit recordEvaluation(
+  mandateId: Field,
+  evaluationCommitment: Bytes<32>,
+  verdict: Verdict
+): [] {
+  requireMandate(mandateId);
+  assert(mandateStates.lookup(mandateId) == MandateState.SUBMITTED,
+    "mandate has no pending submission");
+  assert(evaluatorAuthority == deriveEvaluatorKey(evaluatorSecretKey()),
+    "caller is not the authorized evaluator");
+  assert(verdict != Verdict.PENDING, "verdict must be decisive");
+  evaluationCommitments.insert(mandateId, evaluationCommitment);
+  verdicts.insert(mandateId, verdict);
+  if (verdict == Verdict.ACCEPT) {
+    mandateStates.insert(mandateId, MandateState.ACCEPTED);
+  } else {
+    // REJECT / REVISE return the mandate to execution for a revised
+    // submission before the execution deadline.
+    mandateStates.insert(mandateId, MandateState.IN_EXECUTION);
+  }
+}
