@@ -242,3 +242,39 @@ export circuit cancelMandate(mandateId: Field): [] {
   requirePrincipal(mandateId);
   mandateStates.insert(mandateId, MandateState.CANCELLED);
 }
+
+// ----------------------------------------------------------------------------
+// Bid module — sealed bids with in-circuit eligibility and duplicate
+// prevention via credential-bound nullifiers
+// ----------------------------------------------------------------------------
+
+export circuit submitBid(
+  mandateId: Field,
+  bidCommitment: Bytes<32>,
+  bidNullifier: Bytes<32>
+): [] {
+  requireMandate(mandateId);
+  assert(mandateStates.lookup(mandateId) == MandateState.OPEN_FOR_BIDS,
+    "bid window is not open");
+  assert(blockTimeLt(bidDeadlines.lookup(mandateId)), "bid deadline has passed");
+
+  // Eligibility: prove membership of an issued credential in the registry
+  // without revealing WHICH credential (Merkle path stays in the proof).
+  const credential = operatorCredentialSecret();
+  const path = credentialPath();
+  assert(path.leaf == deriveCredentialHash(credential),
+    "credential path does not open the presented credential");
+  assert(credentialRegistry.checkRoot(disclose(merkleTreePathRoot<10, Bytes<32>>(path))),
+    "operator credential is not registered");
+
+  // The nullifier must be honestly derived from the consumed credential and
+  // this mandate; the same credential can bid at most once per mandate.
+  assert(bidNullifier == deriveBidNullifier(mandateId, credential),
+    "malformed bid nullifier");
+  assert(!bidNullifiers.member(bidNullifier), "duplicate bid");
+  bidNullifiers.insert(bidNullifier);
+
+  assert(!bidRegistry.member(bidCommitment), "bid commitment already registered");
+  bidRegistry.insert(bidCommitment, mandateId);
+  bidCounts.insert(mandateId, (bidCounts.lookup(mandateId) + 1) as Uint<16>);
+}
