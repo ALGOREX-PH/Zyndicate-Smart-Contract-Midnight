@@ -166,3 +166,34 @@ export pure circuit deriveBidCommitment(
     [mandateId as Bytes<32>, price as Field as Bytes<32>, deriveOperatorKey(operatorSk)],
     rand);
 }
+
+// ----------------------------------------------------------------------------
+// Internal guards (inlined helpers, not entry points)
+// ----------------------------------------------------------------------------
+
+circuit requireMandate(mandateId: Field): [] {
+  assert(mandateStates.member(mandateId), "unknown mandate");
+}
+
+circuit requirePrincipal(mandateId: Field): [] {
+  assert(principalKeys.lookup(mandateId) == derivePrincipalKey(principalSecretKey()),
+    "caller is not the mandate principal");
+}
+
+circuit requireOperator(mandateId: Field): [] {
+  assert(operatorKeys.member(mandateId), "no operator recorded for mandate");
+  assert(operatorKeys.lookup(mandateId) == deriveOperatorKey(operatorSecretKey()),
+    "caller is not the awarded operator");
+}
+
+// ----------------------------------------------------------------------------
+// Identity module — credential issuance (issuer-authorized)
+// ----------------------------------------------------------------------------
+
+export circuit registerCredential(credentialHash: Bytes<32>): [] {
+  assert(issuerAuthority == deriveIssuerKey(issuerSecretKey()),
+    "caller is not the credential issuer");
+  assert(!credentialRegistry.isFull(), "credential registry is full");
+  credentialRegistry.insert(credentialHash);
+  credentialCount.increment(1);
+}
