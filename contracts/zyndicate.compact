@@ -376,3 +376,34 @@ export circuit settleMandate(mandateId: Field, settlementNullifier: Bytes<32>): 
   settledMandates.increment(1);
   mandateStates.insert(mandateId, MandateState.SETTLED);
 }
+
+// ----------------------------------------------------------------------------
+// Dispute module — either party may freeze settlement; only the tribunal
+// authority may resolve
+// ----------------------------------------------------------------------------
+
+export circuit openDispute(mandateId: Field, disputeCommitment: Bytes<32>): [] {
+  requireMandate(mandateId);
+  const s = mandateStates.lookup(mandateId);
+  assert(s == MandateState.SUBMITTED || s == MandateState.ACCEPTED,
+    "mandate is not in a disputable state");
+  // Either party to the mandate may open a dispute. In both permitted
+  // states an operator key is guaranteed to be recorded.
+  const isPrincipal =
+    principalKeys.lookup(mandateId) == derivePrincipalKey(principalSecretKey());
+  const isOperator =
+    operatorKeys.lookup(mandateId) == deriveOperatorKey(operatorSecretKey());
+  assert(isPrincipal || isOperator, "caller is not a party to the mandate");
+  disputeCommitments.insert(mandateId, disputeCommitment);
+  mandateStates.insert(mandateId, MandateState.DISPUTED);
+}
+
+export circuit resolveDispute(mandateId: Field, rulingCommitment: Bytes<32>): [] {
+  requireMandate(mandateId);
+  assert(mandateStates.lookup(mandateId) == MandateState.DISPUTED,
+    "mandate is not disputed");
+  assert(tribunalAuthority == deriveTribunalKey(tribunalSecretKey()),
+    "caller is not the tribunal authority");
+  rulingCommitments.insert(mandateId, rulingCommitment);
+  mandateStates.insert(mandateId, MandateState.RESOLVED);
+}
