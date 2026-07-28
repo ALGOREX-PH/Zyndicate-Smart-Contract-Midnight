@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+
+# Compact compiled artifacts: keep the generated JS API, skip heavy zk material
+contracts/managed/**/keys/
+contracts/managed/**/zkir/
