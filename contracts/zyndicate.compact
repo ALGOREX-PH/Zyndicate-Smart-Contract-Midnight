@@ -1,0 +1,112 @@
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+// ============================================================================
+// ZYNDICATE — confidential work-coordination protocol (Midnight MVP)
+//
+// One primary contract with clearly separated internal sections:
+//   Identity | Mandate | Bid | Award | Submission | Evaluation |
+//   Vault/Settlement | Reputation | Dispute
+//
+// Privacy rule (PRD 13): the public ledger holds ONLY commitments, state
+// enums, deadlines, nullifier sets, counters, and hashed role keys.
+// No budgets, no bid values, no identities.
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Mandate state machine (Class A: public)
+// ----------------------------------------------------------------------------
+
+export enum MandateState {
+  OPEN_FOR_BIDS,
+  BIDDING_CLOSED,
+  AWARDED,
+  IN_EXECUTION,
+  SUBMITTED,
+  ACCEPTED,
+  SETTLED,
+  DISPUTED,
+  RESOLVED,
+  CANCELLED
+}
+
+export enum Verdict { PENDING, ACCEPT, REJECT, REVISE }
+
+// ----------------------------------------------------------------------------
+// Ledger state — every field is Class A (public): commitments, hashes,
+// enums, deadlines, nullifiers, counters. Nothing confidential lands here.
+// ----------------------------------------------------------------------------
+
+// Identity: deploy-time role authorities (hashed role keys, sealed at deploy)
+export sealed ledger evaluatorAuthority: Bytes<32>;
+export sealed ledger tribunalAuthority: Bytes<32>;
+export sealed ledger issuerAuthority: Bytes<32>;
+
+// Identity: registry of issued operator credential hashes (Merkle membership)
+export ledger credentialRegistry: HistoricMerkleTree<10, Bytes<32>>;
+export ledger credentialCount: Counter;
+
+// Mandate
+export ledger mandateCount: Counter;
+export ledger mandateStates: Map<Field, MandateState>;
+export ledger mandateCommitments: Map<Field, Bytes<32>>;
+export ledger covenantCommitments: Map<Field, Bytes<32>>;
+export ledger mandateDomains: Map<Field, Bytes<32>>;
+export ledger principalKeys: Map<Field, Bytes<32>>;
+export ledger bidDeadlines: Map<Field, Uint<64>>;
+export ledger executionDeadlines: Map<Field, Uint<64>>;
+
+// Bid
+export ledger bidRegistry: Map<Bytes<32>, Field>;  // bid commitment -> mandate id
+export ledger bidCounts: Map<Field, Uint<16>>;
+export ledger bidNullifiers: Set<Bytes<32>>;
+
+// Award
+export ledger winningBids: Map<Field, Bytes<32>>;
+export ledger operatorKeys: Map<Field, Bytes<32>>;
+
+// Submission
+export ledger artifactCommitments: Map<Field, Bytes<32>>;
+export ledger receiptCommitments: Map<Field, Bytes<32>>;
+
+// Evaluation
+export ledger evaluationCommitments: Map<Field, Bytes<32>>;
+export ledger verdicts: Map<Field, Verdict>;
+
+// Vault / settlement
+export ledger settlementNullifiers: Set<Bytes<32>>;
+
+// Reputation / receipts
+export ledger receiptNullifiers: Set<Bytes<32>>;
+export ledger settledMandates: Counter;
+export ledger issuedReceipts: Counter;
+
+// Dispute
+export ledger disputeCommitments: Map<Field, Bytes<32>>;
+export ledger rulingCommitments: Map<Field, Bytes<32>>;
+
+constructor(
+  initialEvaluatorAuthority: Bytes<32>,
+  initialTribunalAuthority: Bytes<32>,
+  initialIssuerAuthority: Bytes<32>
+) {
+  evaluatorAuthority = initialEvaluatorAuthority;
+  tribunalAuthority = initialTribunalAuthority;
+  issuerAuthority = initialIssuerAuthority;
+}
+
+// ----------------------------------------------------------------------------
+// Witnesses — private local data (Class D). NEVER trusted without an
+// in-circuit assert; every use below is constrained against ledger state.
+// ----------------------------------------------------------------------------
+
+witness principalSecretKey(): Bytes<32>;
+witness operatorSecretKey(): Bytes<32>;
+witness operatorCredentialSecret(): Bytes<32>;
+witness credentialPath(): MerkleTreePath<10, Bytes<32>>;
+witness evaluatorSecretKey(): Bytes<32>;
+witness tribunalSecretKey(): Bytes<32>;
+witness issuerSecretKey(): Bytes<32>;
+witness bidOpeningPrice(): Uint<64>;
+witness bidOpeningRand(): Bytes<32>;
