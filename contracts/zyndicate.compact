@@ -407,3 +407,19 @@ export circuit resolveDispute(mandateId: Field, rulingCommitment: Bytes<32>): []
   rulingCommitments.insert(mandateId, rulingCommitment);
   mandateStates.insert(mandateId, MandateState.RESOLVED);
 }
+
+// ----------------------------------------------------------------------------
+// Reputation module — duplicate-proof completion receipts
+// ----------------------------------------------------------------------------
+
+export circuit issueReceipt(mandateId: Field, receiptNullifier: Bytes<32>): [] {
+  requireMandate(mandateId);
+  assert(mandateStates.lookup(mandateId) == MandateState.SETTLED,
+    "mandate is not settled");
+  requireOperator(mandateId);
+  assert(receiptNullifier == deriveReceiptNullifier(mandateId, operatorSecretKey()),
+    "malformed receipt nullifier");
+  assert(!receiptNullifiers.member(receiptNullifier), "receipt already issued");
+  receiptNullifiers.insert(receiptNullifier);
+  issuedReceipts.increment(1);
+}
