@@ -311,3 +311,23 @@ export circuit acceptAward(mandateId: Field): [] {
   operatorKeys.insert(mandateId, disclose(deriveOperatorKey(sk)));
   mandateStates.insert(mandateId, MandateState.IN_EXECUTION);
 }
+
+// ----------------------------------------------------------------------------
+// Submission module — deadline-checked artifact + execution receipt commit
+// ----------------------------------------------------------------------------
+
+export circuit commitSubmission(
+  mandateId: Field,
+  artifactCommitment: Bytes<32>,
+  receiptCommitment: Bytes<32>
+): [] {
+  requireMandate(mandateId);
+  assert(mandateStates.lookup(mandateId) == MandateState.IN_EXECUTION,
+    "mandate is not in execution");
+  requireOperator(mandateId);
+  assert(blockTimeLt(executionDeadlines.lookup(mandateId)),
+    "execution deadline has passed");
+  artifactCommitments.insert(mandateId, artifactCommitment);
+  receiptCommitments.insert(mandateId, receiptCommitment);
+  mandateStates.insert(mandateId, MandateState.SUBMITTED);
+}
