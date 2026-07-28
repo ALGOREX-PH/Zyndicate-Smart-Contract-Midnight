@@ -357,3 +357,22 @@ export circuit recordEvaluation(
     mandateStates.insert(mandateId, MandateState.IN_EXECUTION);
   }
 }
+
+// ----------------------------------------------------------------------------
+// Vault / settlement module — single settlement enforced by nullifier set;
+// a DISPUTED state freezes settlement until the tribunal resolves it
+// ----------------------------------------------------------------------------
+
+export circuit settleMandate(mandateId: Field, settlementNullifier: Bytes<32>): [] {
+  requireMandate(mandateId);
+  const s = mandateStates.lookup(mandateId);
+  assert(s == MandateState.ACCEPTED || s == MandateState.RESOLVED,
+    "mandate is not ready to settle");
+  requirePrincipal(mandateId);
+  assert(settlementNullifier == deriveSettlementNullifier(mandateId, principalSecretKey()),
+    "malformed settlement nullifier");
+  assert(!settlementNullifiers.member(settlementNullifier), "mandate already settled");
+  settlementNullifiers.insert(settlementNullifier);
+  settledMandates.increment(1);
+  mandateStates.insert(mandateId, MandateState.SETTLED);
+}
