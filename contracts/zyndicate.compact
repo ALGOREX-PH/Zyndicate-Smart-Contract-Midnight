@@ -12,6 +12,12 @@ import CompactStandardLibrary;
 // Privacy rule (PRD 13): the public ledger holds ONLY commitments, state
 // enums, deadlines, nullifier sets, counters, and hashed role keys.
 // No budgets, no bid values, no identities.
+//
+// Disclosure convention: exported-circuit parameters are private inputs to
+// the proof until disclosed. Every parameter that is *meant* to be public
+// (commitments, nullifiers, deadlines, ids — all computed client-side for
+// publication) is bound to a disclosed local at the top of its circuit.
+// Witness values are NEVER disclosed raw — only domain-separated hashes.
 // ============================================================================
 
 // ----------------------------------------------------------------------------
@@ -91,9 +97,10 @@ constructor(
   initialTribunalAuthority: Bytes<32>,
   initialIssuerAuthority: Bytes<32>
 ) {
-  evaluatorAuthority = initialEvaluatorAuthority;
-  tribunalAuthority = initialTribunalAuthority;
-  issuerAuthority = initialIssuerAuthority;
+  // Deploy-time configuration: hashed role keys, public by design.
+  evaluatorAuthority = disclose(initialEvaluatorAuthority);
+  tribunalAuthority = disclose(initialTribunalAuthority);
+  issuerAuthority = disclose(initialIssuerAuthority);
 }
 
 // ----------------------------------------------------------------------------
@@ -168,7 +175,8 @@ export pure circuit deriveBidCommitment(
 }
 
 // ----------------------------------------------------------------------------
-// Internal guards (inlined helpers, not entry points)
+// Internal guards (inlined helpers, not entry points).
+// All take an already-disclosed mandate id.
 // ----------------------------------------------------------------------------
 
 circuit requireMandate(mandateId: Field): [] {
@@ -191,10 +199,11 @@ circuit requireOperator(mandateId: Field): [] {
 // ----------------------------------------------------------------------------
 
 export circuit registerCredential(credentialHash: Bytes<32>): [] {
+  const credHash = disclose(credentialHash);
   assert(issuerAuthority == deriveIssuerKey(issuerSecretKey()),
     "caller is not the credential issuer");
   assert(!credentialRegistry.isFull(), "credential registry is full");
-  credentialRegistry.insert(credentialHash);
+  credentialRegistry.insert(credHash);
   credentialCount.increment(1);
 }
 
@@ -209,38 +218,45 @@ export circuit createMandate(
   bidDeadline: Uint<64>,
   executionDeadline: Uint<64>
 ): Field {
-  assert(blockTimeLt(bidDeadline), "bid deadline must be in the future");
-  assert(bidDeadline <= executionDeadline, "execution deadline precedes bid deadline");
+  const mCommit = disclose(mandateCommitment);
+  const cCommit = disclose(covenantCommitment);
+  const domain = disclose(publicDomain);
+  const bidDl = disclose(bidDeadline);
+  const execDl = disclose(executionDeadline);
+  assert(blockTimeLt(bidDl), "bid deadline must be in the future");
+  assert(bidDl <= execDl, "execution deadline precedes bid deadline");
   mandateCount.increment(1);
   const mandateId = mandateCount.read() as Field;
   mandateStates.insert(mandateId, MandateState.OPEN_FOR_BIDS);
-  mandateCommitments.insert(mandateId, mandateCommitment);
-  covenantCommitments.insert(mandateId, covenantCommitment);
-  mandateDomains.insert(mandateId, publicDomain);
+  mandateCommitments.insert(mandateId, mCommit);
+  covenantCommitments.insert(mandateId, cCommit);
+  mandateDomains.insert(mandateId, domain);
   // Deliberate disclosure: a preimage-resistant, domain-separated hash of the
   // principal's high-entropy secret key. Reveals no identity information.
   principalKeys.insert(mandateId, disclose(derivePrincipalKey(principalSecretKey())));
-  bidDeadlines.insert(mandateId, bidDeadline);
-  executionDeadlines.insert(mandateId, executionDeadline);
+  bidDeadlines.insert(mandateId, bidDl);
+  executionDeadlines.insert(mandateId, execDl);
   bidCounts.insert(mandateId, 0);
   return mandateId;
 }
 
 export circuit closeBidWindow(mandateId: Field): [] {
-  requireMandate(mandateId);
-  assert(mandateStates.lookup(mandateId) == MandateState.OPEN_FOR_BIDS,
+  const id = disclose(mandateId);
+  requireMandate(id);
+  assert(mandateStates.lookup(id) == MandateState.OPEN_FOR_BIDS,
     "bid window is not open");
-  requirePrincipal(mandateId);
-  mandateStates.insert(mandateId, MandateState.BIDDING_CLOSED);
+  requirePrincipal(id);
+  mandateStates.insert(id, MandateState.BIDDING_CLOSED);
 }
 
 export circuit cancelMandate(mandateId: Field): [] {
-  requireMandate(mandateId);
-  const s = mandateStates.lookup(mandateId);
+  const id = disclose(mandateId);
+  requireMandate(id);
+  const s = mandateStates.lookup(id);
   assert(s == MandateState.OPEN_FOR_BIDS || s == MandateState.BIDDING_CLOSED,
     "mandate can no longer be cancelled");
-  requirePrincipal(mandateId);
-  mandateStates.insert(mandateId, MandateState.CANCELLED);
+  requirePrincipal(id);
+  mandateStates.insert(id, MandateState.CANCELLED);
 }
 
 // ----------------------------------------------------------------------------
@@ -253,10 +269,13 @@ export circuit submitBid(
   bidCommitment: Bytes<32>,
   bidNullifier: Bytes<32>
 ): [] {
-  requireMandate(mandateId);
-  assert(mandateStates.lookup(mandateId) == MandateState.OPEN_FOR_BIDS,
+  const id = disclose(mandateId);
+  const commitment = disclose(bidCommitment);
+  const nullifier = disclose(bidNullifier);
+  requireMandate(id);
+  assert(mandateStates.lookup(id) == MandateState.OPEN_FOR_BIDS,
     "bid window is not open");
-  assert(blockTimeLt(bidDeadlines.lookup(mandateId)), "bid deadline has passed");
+  assert(blockTimeLt(bidDeadlines.lookup(id)), "bid deadline has passed");
 
   // Eligibility: prove membership of an issued credential in the registry
   // without revealing WHICH credential (Merkle path stays in the proof).
@@ -269,14 +288,14 @@ export circuit submitBid(
 
   // The nullifier must be honestly derived from the consumed credential and
   // this mandate; the same credential can bid at most once per mandate.
-  assert(bidNullifier == deriveBidNullifier(mandateId, credential),
+  assert(nullifier == deriveBidNullifier(id, credential),
     "malformed bid nullifier");
-  assert(!bidNullifiers.member(bidNullifier), "duplicate bid");
-  bidNullifiers.insert(bidNullifier);
+  assert(!bidNullifiers.member(nullifier), "duplicate bid");
+  bidNullifiers.insert(nullifier);
 
-  assert(!bidRegistry.member(bidCommitment), "bid commitment already registered");
-  bidRegistry.insert(bidCommitment, mandateId);
-  bidCounts.insert(mandateId, (bidCounts.lookup(mandateId) + 1) as Uint<16>);
+  assert(!bidRegistry.member(commitment), "bid commitment already registered");
+  bidRegistry.insert(commitment, id);
+  bidCounts.insert(id, (bidCounts.lookup(id) + 1) as Uint<16>);
 }
 
 // ----------------------------------------------------------------------------
@@ -285,31 +304,33 @@ export circuit submitBid(
 // ----------------------------------------------------------------------------
 
 export circuit awardBid(mandateId: Field, winningBidCommitment: Bytes<32>): [] {
-  requireMandate(mandateId);
-  assert(mandateStates.lookup(mandateId) == MandateState.BIDDING_CLOSED,
+  const id = disclose(mandateId);
+  const winner = disclose(winningBidCommitment);
+  requireMandate(id);
+  assert(mandateStates.lookup(id) == MandateState.BIDDING_CLOSED,
     "bidding is not closed");
-  requirePrincipal(mandateId);
-  assert(bidRegistry.member(winningBidCommitment), "winning bid was never registered");
-  assert(bidRegistry.lookup(winningBidCommitment) == mandateId,
-    "bid belongs to a different mandate");
-  winningBids.insert(mandateId, winningBidCommitment);
-  mandateStates.insert(mandateId, MandateState.AWARDED);
+  requirePrincipal(id);
+  assert(bidRegistry.member(winner), "winning bid was never registered");
+  assert(bidRegistry.lookup(winner) == id, "bid belongs to a different mandate");
+  winningBids.insert(id, winner);
+  mandateStates.insert(id, MandateState.AWARDED);
 }
 
 export circuit acceptAward(mandateId: Field): [] {
-  requireMandate(mandateId);
-  assert(mandateStates.lookup(mandateId) == MandateState.AWARDED,
+  const id = disclose(mandateId);
+  requireMandate(id);
+  assert(mandateStates.lookup(id) == MandateState.AWARDED,
     "mandate is not awarded");
   // The operator proves knowledge of the winning bid opening (price,
   // operator key, randomness) without revealing any of it.
   const sk = operatorSecretKey();
-  const reconstructed = deriveBidCommitment(mandateId, bidOpeningPrice(), sk, bidOpeningRand());
-  assert(winningBids.lookup(mandateId) == reconstructed,
+  const reconstructed = deriveBidCommitment(id, bidOpeningPrice(), sk, bidOpeningRand());
+  assert(winningBids.lookup(id) == reconstructed,
     "caller cannot open the winning bid");
   // Deliberate disclosure: domain-separated hash of the operator's secret
   // key, used from here on as the operator's on-chain role key.
-  operatorKeys.insert(mandateId, disclose(deriveOperatorKey(sk)));
-  mandateStates.insert(mandateId, MandateState.IN_EXECUTION);
+  operatorKeys.insert(id, disclose(deriveOperatorKey(sk)));
+  mandateStates.insert(id, MandateState.IN_EXECUTION);
 }
 
 // ----------------------------------------------------------------------------
@@ -321,15 +342,18 @@ export circuit commitSubmission(
   artifactCommitment: Bytes<32>,
   receiptCommitment: Bytes<32>
 ): [] {
-  requireMandate(mandateId);
-  assert(mandateStates.lookup(mandateId) == MandateState.IN_EXECUTION,
+  const id = disclose(mandateId);
+  const artifact = disclose(artifactCommitment);
+  const receipt = disclose(receiptCommitment);
+  requireMandate(id);
+  assert(mandateStates.lookup(id) == MandateState.IN_EXECUTION,
     "mandate is not in execution");
-  requireOperator(mandateId);
-  assert(blockTimeLt(executionDeadlines.lookup(mandateId)),
+  requireOperator(id);
+  assert(blockTimeLt(executionDeadlines.lookup(id)),
     "execution deadline has passed");
-  artifactCommitments.insert(mandateId, artifactCommitment);
-  receiptCommitments.insert(mandateId, receiptCommitment);
-  mandateStates.insert(mandateId, MandateState.SUBMITTED);
+  artifactCommitments.insert(id, artifact);
+  receiptCommitments.insert(id, receipt);
+  mandateStates.insert(id, MandateState.SUBMITTED);
 }
 
 // ----------------------------------------------------------------------------
@@ -341,20 +365,23 @@ export circuit recordEvaluation(
   evaluationCommitment: Bytes<32>,
   verdict: Verdict
 ): [] {
-  requireMandate(mandateId);
-  assert(mandateStates.lookup(mandateId) == MandateState.SUBMITTED,
+  const id = disclose(mandateId);
+  const evaluation = disclose(evaluationCommitment);
+  const v = disclose(verdict);
+  requireMandate(id);
+  assert(mandateStates.lookup(id) == MandateState.SUBMITTED,
     "mandate has no pending submission");
   assert(evaluatorAuthority == deriveEvaluatorKey(evaluatorSecretKey()),
     "caller is not the authorized evaluator");
-  assert(verdict != Verdict.PENDING, "verdict must be decisive");
-  evaluationCommitments.insert(mandateId, evaluationCommitment);
-  verdicts.insert(mandateId, verdict);
-  if (verdict == Verdict.ACCEPT) {
-    mandateStates.insert(mandateId, MandateState.ACCEPTED);
+  assert(v != Verdict.PENDING, "verdict must be decisive");
+  evaluationCommitments.insert(id, evaluation);
+  verdicts.insert(id, v);
+  if (v == Verdict.ACCEPT) {
+    mandateStates.insert(id, MandateState.ACCEPTED);
   } else {
     // REJECT / REVISE return the mandate to execution for a revised
     // submission before the execution deadline.
-    mandateStates.insert(mandateId, MandateState.IN_EXECUTION);
+    mandateStates.insert(id, MandateState.IN_EXECUTION);
   }
 }
 
@@ -364,17 +391,19 @@ export circuit recordEvaluation(
 // ----------------------------------------------------------------------------
 
 export circuit settleMandate(mandateId: Field, settlementNullifier: Bytes<32>): [] {
-  requireMandate(mandateId);
-  const s = mandateStates.lookup(mandateId);
+  const id = disclose(mandateId);
+  const nullifier = disclose(settlementNullifier);
+  requireMandate(id);
+  const s = mandateStates.lookup(id);
   assert(s == MandateState.ACCEPTED || s == MandateState.RESOLVED,
     "mandate is not ready to settle");
-  requirePrincipal(mandateId);
-  assert(settlementNullifier == deriveSettlementNullifier(mandateId, principalSecretKey()),
+  requirePrincipal(id);
+  assert(nullifier == deriveSettlementNullifier(id, principalSecretKey()),
     "malformed settlement nullifier");
-  assert(!settlementNullifiers.member(settlementNullifier), "mandate already settled");
-  settlementNullifiers.insert(settlementNullifier);
+  assert(!settlementNullifiers.member(nullifier), "mandate already settled");
+  settlementNullifiers.insert(nullifier);
   settledMandates.increment(1);
-  mandateStates.insert(mandateId, MandateState.SETTLED);
+  mandateStates.insert(id, MandateState.SETTLED);
 }
 
 // ----------------------------------------------------------------------------
@@ -383,29 +412,33 @@ export circuit settleMandate(mandateId: Field, settlementNullifier: Bytes<32>): 
 // ----------------------------------------------------------------------------
 
 export circuit openDispute(mandateId: Field, disputeCommitment: Bytes<32>): [] {
-  requireMandate(mandateId);
-  const s = mandateStates.lookup(mandateId);
+  const id = disclose(mandateId);
+  const dispute = disclose(disputeCommitment);
+  requireMandate(id);
+  const s = mandateStates.lookup(id);
   assert(s == MandateState.SUBMITTED || s == MandateState.ACCEPTED,
     "mandate is not in a disputable state");
   // Either party to the mandate may open a dispute. In both permitted
   // states an operator key is guaranteed to be recorded.
   const isPrincipal =
-    principalKeys.lookup(mandateId) == derivePrincipalKey(principalSecretKey());
+    principalKeys.lookup(id) == derivePrincipalKey(principalSecretKey());
   const isOperator =
-    operatorKeys.lookup(mandateId) == deriveOperatorKey(operatorSecretKey());
+    operatorKeys.lookup(id) == deriveOperatorKey(operatorSecretKey());
   assert(isPrincipal || isOperator, "caller is not a party to the mandate");
-  disputeCommitments.insert(mandateId, disputeCommitment);
-  mandateStates.insert(mandateId, MandateState.DISPUTED);
+  disputeCommitments.insert(id, dispute);
+  mandateStates.insert(id, MandateState.DISPUTED);
 }
 
 export circuit resolveDispute(mandateId: Field, rulingCommitment: Bytes<32>): [] {
-  requireMandate(mandateId);
-  assert(mandateStates.lookup(mandateId) == MandateState.DISPUTED,
+  const id = disclose(mandateId);
+  const ruling = disclose(rulingCommitment);
+  requireMandate(id);
+  assert(mandateStates.lookup(id) == MandateState.DISPUTED,
     "mandate is not disputed");
   assert(tribunalAuthority == deriveTribunalKey(tribunalSecretKey()),
     "caller is not the tribunal authority");
-  rulingCommitments.insert(mandateId, rulingCommitment);
-  mandateStates.insert(mandateId, MandateState.RESOLVED);
+  rulingCommitments.insert(id, ruling);
+  mandateStates.insert(id, MandateState.RESOLVED);
 }
 
 // ----------------------------------------------------------------------------
@@ -413,13 +446,15 @@ export circuit resolveDispute(mandateId: Field, rulingCommitment: Bytes<32>): []
 // ----------------------------------------------------------------------------
 
 export circuit issueReceipt(mandateId: Field, receiptNullifier: Bytes<32>): [] {
-  requireMandate(mandateId);
-  assert(mandateStates.lookup(mandateId) == MandateState.SETTLED,
+  const id = disclose(mandateId);
+  const nullifier = disclose(receiptNullifier);
+  requireMandate(id);
+  assert(mandateStates.lookup(id) == MandateState.SETTLED,
     "mandate is not settled");
-  requireOperator(mandateId);
-  assert(receiptNullifier == deriveReceiptNullifier(mandateId, operatorSecretKey()),
+  requireOperator(id);
+  assert(nullifier == deriveReceiptNullifier(id, operatorSecretKey()),
     "malformed receipt nullifier");
-  assert(!receiptNullifiers.member(receiptNullifier), "receipt already issued");
-  receiptNullifiers.insert(receiptNullifier);
+  assert(!receiptNullifiers.member(nullifier), "receipt already issued");
+  receiptNullifiers.insert(nullifier);
   issuedReceipts.increment(1);
 }
