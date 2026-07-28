@@ -197,3 +197,48 @@ export circuit registerCredential(credentialHash: Bytes<32>): [] {
   credentialRegistry.insert(credentialHash);
   credentialCount.increment(1);
 }
+
+// ----------------------------------------------------------------------------
+// Mandate module — creation and bid-window lifecycle
+// ----------------------------------------------------------------------------
+
+export circuit createMandate(
+  mandateCommitment: Bytes<32>,
+  covenantCommitment: Bytes<32>,
+  publicDomain: Bytes<32>,
+  bidDeadline: Uint<64>,
+  executionDeadline: Uint<64>
+): Field {
+  assert(blockTimeLt(bidDeadline), "bid deadline must be in the future");
+  assert(bidDeadline <= executionDeadline, "execution deadline precedes bid deadline");
+  mandateCount.increment(1);
+  const mandateId = mandateCount.read() as Field;
+  mandateStates.insert(mandateId, MandateState.OPEN_FOR_BIDS);
+  mandateCommitments.insert(mandateId, mandateCommitment);
+  covenantCommitments.insert(mandateId, covenantCommitment);
+  mandateDomains.insert(mandateId, publicDomain);
+  // Deliberate disclosure: a preimage-resistant, domain-separated hash of the
+  // principal's high-entropy secret key. Reveals no identity information.
+  principalKeys.insert(mandateId, disclose(derivePrincipalKey(principalSecretKey())));
+  bidDeadlines.insert(mandateId, bidDeadline);
+  executionDeadlines.insert(mandateId, executionDeadline);
+  bidCounts.insert(mandateId, 0);
+  return mandateId;
+}
+
+export circuit closeBidWindow(mandateId: Field): [] {
+  requireMandate(mandateId);
+  assert(mandateStates.lookup(mandateId) == MandateState.OPEN_FOR_BIDS,
+    "bid window is not open");
+  requirePrincipal(mandateId);
+  mandateStates.insert(mandateId, MandateState.BIDDING_CLOSED);
+}
+
+export circuit cancelMandate(mandateId: Field): [] {
+  requireMandate(mandateId);
+  const s = mandateStates.lookup(mandateId);
+  assert(s == MandateState.OPEN_FOR_BIDS || s == MandateState.BIDDING_CLOSED,
+    "mandate can no longer be cancelled");
+  requirePrincipal(mandateId);
+  mandateStates.insert(mandateId, MandateState.CANCELLED);
+}
