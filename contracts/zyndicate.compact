@@ -278,3 +278,36 @@ export circuit submitBid(
   bidRegistry.insert(bidCommitment, mandateId);
   bidCounts.insert(mandateId, (bidCounts.lookup(mandateId) + 1) as Uint<16>);
 }
+
+// ----------------------------------------------------------------------------
+// Award module — principal selects a winner; operator proves knowledge of
+// the winning bid opening to accept
+// ----------------------------------------------------------------------------
+
+export circuit awardBid(mandateId: Field, winningBidCommitment: Bytes<32>): [] {
+  requireMandate(mandateId);
+  assert(mandateStates.lookup(mandateId) == MandateState.BIDDING_CLOSED,
+    "bidding is not closed");
+  requirePrincipal(mandateId);
+  assert(bidRegistry.member(winningBidCommitment), "winning bid was never registered");
+  assert(bidRegistry.lookup(winningBidCommitment) == mandateId,
+    "bid belongs to a different mandate");
+  winningBids.insert(mandateId, winningBidCommitment);
+  mandateStates.insert(mandateId, MandateState.AWARDED);
+}
+
+export circuit acceptAward(mandateId: Field): [] {
+  requireMandate(mandateId);
+  assert(mandateStates.lookup(mandateId) == MandateState.AWARDED,
+    "mandate is not awarded");
+  // The operator proves knowledge of the winning bid opening (price,
+  // operator key, randomness) without revealing any of it.
+  const sk = operatorSecretKey();
+  const reconstructed = deriveBidCommitment(mandateId, bidOpeningPrice(), sk, bidOpeningRand());
+  assert(winningBids.lookup(mandateId) == reconstructed,
+    "caller cannot open the winning bid");
+  // Deliberate disclosure: domain-separated hash of the operator's secret
+  // key, used from here on as the operator's on-chain role key.
+  operatorKeys.insert(mandateId, disclose(deriveOperatorKey(sk)));
+  mandateStates.insert(mandateId, MandateState.IN_EXECUTION);
+}
