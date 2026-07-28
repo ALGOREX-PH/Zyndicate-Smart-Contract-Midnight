@@ -110,3 +110,59 @@ witness tribunalSecretKey(): Bytes<32>;
 witness issuerSecretKey(): Bytes<32>;
 witness bidOpeningPrice(): Uint<64>;
 witness bidOpeningRand(): Bytes<32>;
+
+// ----------------------------------------------------------------------------
+// Derivation circuits — domain-separated key / commitment / nullifier
+// derivation via persistentHash + pad(32, "zyndicate:...").
+// A unique separator per purpose keeps every hash namespace disjoint.
+// ----------------------------------------------------------------------------
+
+export pure circuit derivePrincipalKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "zyndicate:principal:"), sk]);
+}
+
+export pure circuit deriveOperatorKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "zyndicate:operator:"), sk]);
+}
+
+export pure circuit deriveEvaluatorKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "zyndicate:evaluator:"), sk]);
+}
+
+export pure circuit deriveTribunalKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "zyndicate:tribunal:"), sk]);
+}
+
+export pure circuit deriveIssuerKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "zyndicate:issuer:"), sk]);
+}
+
+export pure circuit deriveCredentialHash(credentialSecret: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "zyndicate:cred:"), credentialSecret]);
+}
+
+export pure circuit deriveBidNullifier(mandateId: Field, credentialSecret: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>(
+    [pad(32, "zyndicate:bid:nul:"), mandateId as Bytes<32>, credentialSecret]);
+}
+
+export pure circuit deriveSettlementNullifier(mandateId: Field, principalSk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>(
+    [pad(32, "zyndicate:settle:nul:"), mandateId as Bytes<32>, principalSk]);
+}
+
+export pure circuit deriveReceiptNullifier(mandateId: Field, operatorSk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>(
+    [pad(32, "zyndicate:receipt:nul:"), mandateId as Bytes<32>, operatorSk]);
+}
+
+export pure circuit deriveBidCommitment(
+  mandateId: Field,
+  price: Uint<64>,
+  operatorSk: Bytes<32>,
+  rand: Bytes<32>
+): Bytes<32> {
+  return persistentCommit<Vector<3, Bytes<32>>>(
+    [mandateId as Bytes<32>, price as Field as Bytes<32>, deriveOperatorKey(operatorSk)],
+    rand);
+}
