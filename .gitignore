@@ -7,3 +7,6 @@ dist/
 # Compact compiled artifacts: keep the generated JS API, skip heavy zk material
 contracts/managed/**/keys/
 contracts/managed/**/zkir/
+
+# Local encrypted LevelDB store for deploy-script private state / signing keys
+.private-state/
