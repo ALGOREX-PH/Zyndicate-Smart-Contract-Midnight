@@ -127,11 +127,33 @@ Not on-chain, ever: budgets, bid prices, identities, deliverables, evaluation
 notes, credential secrets, commitment randomness. See `SECURITY.md` for the
 disclosure audit.
 
-## Build and test
+## Toolchain setup
 
-Prerequisites: Linux/macOS (Windows: WSL2), Node 22+, the
-[Compact toolchain](https://docs.midnight.network/compact/) (compiler 0.31.x,
-language 0.23), `@midnight-ntwrk/compact-runtime@^0.16.0` (installed via npm).
+Prerequisites: Linux/macOS (Windows: WSL2). This repo was built and compiled
+entirely without root access — every install below runs in user space.
+
+```bash
+# Compact compiler + CLI (installs to ~/.compact/bin)
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+export PATH="$HOME/.compact/bin:$PATH"
+compact update
+compact compile --version   # expect toolchain 0.31.x, language 0.23
+
+# Node 22 via nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+\. "$HOME/.nvm/nvm.sh" && nvm install 22
+```
+
+A local proof server (port 6300, fixed) is required only to generate real
+zk proofs for a deployment — it is not needed to compile or run the
+simulator test suite. The official distribution is a Docker image; this
+environment has no Docker anywhere, so the proof server here was built from
+source instead (`midnightntwrk/midnight-ledger`, `proof-server/` crate) with
+the Rust toolchain already on `PATH` (`rustc`/`cargo`) — see the deployment
+section below for the exact build.
+
+## Build and test
 
 ```bash
 npm install
