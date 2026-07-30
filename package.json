@@ -11,7 +11,7 @@
     "deploy:preprod": "tsx scripts/deploy-preprod.ts"
   },
   "dependencies": {
-    "@midnight-ntwrk/compact-js": "^4.1.1",
+    "@midnight-ntwrk/compact-js": "2.5.1",
     "@midnight-ntwrk/ledger-v8": "^8.1.0",
     "@midnight-ntwrk/midnight-js-contracts": "^4.1.1",
     "@midnight-ntwrk/midnight-js-http-client-proof-provider": "^4.1.1",
