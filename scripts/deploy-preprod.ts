@@ -49,8 +49,11 @@ import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-p
 import { httpClientProofProvider } from "@midnight-ntwrk/midnight-js-http-client-proof-provider";
 import { levelPrivateStateProvider } from "@midnight-ntwrk/midnight-js-level-private-state-provider";
 import { NodeZkConfigProvider } from "@midnight-ntwrk/midnight-js-node-zk-config-provider";
+import { deployContract } from "@midnight-ntwrk/midnight-js-contracts";
+import { CompiledContract } from "@midnight-ntwrk/midnight-js-protocol/compact-js";
 
-import type { ZyndicatePrivateState } from "../contracts/witnesses.js";
+import * as CompiledZyndicateContract from "../contracts/managed/zyndicate/contract/index.js";
+import { witnesses, createPrivateState, type ZyndicatePrivateState } from "../contracts/witnesses.js";
 import type { Contract as ZyndicateContract } from "../contracts/managed/zyndicate/contract/index.js";
 
 type ZyndicateCircuits = Exclude<
@@ -220,6 +223,55 @@ async function configureProviders(
   };
 }
 
+// ----------------------------------------------------------------------------
+// Deploy-time role authorities — evaluator/tribunal/issuer secret keys and
+// their on-chain hashes, per the constructor pattern proven in
+// test/zyndicate.test.ts: three random 32-byte secrets, hashed via
+// pureCircuits.deriveEvaluatorKey/deriveTribunalKey/deriveIssuerKey, passed
+// as the contract constructor's three Bytes<32> arguments.
+//
+// Persisted OUTSIDE this repo (~/wallet-setup/deploy-authorities.json,
+// alongside the wallet material it's paired with) and reused across runs so
+// repeated `npm run deploy:preprod` invocations don't mint fresh authorities
+// each time. Whoever runs the evaluator/tribunal/issuer roles for this
+// deployment will need the corresponding secret key from that file.
+//
+// TESTNET-ONLY, LOW-STAKES KEY MATERIAL — Preprod is a public test network
+// with no real value at stake; this is not a production key-management
+// pattern.
+// ----------------------------------------------------------------------------
+
+interface DeployAuthorities {
+  network: string;
+  evaluatorSecretKeyHex: string;
+  tribunalSecretKeyHex: string;
+  issuerSecretKeyHex: string;
+  generatedAt: string;
+}
+
+function loadOrCreateDeployAuthorities(): DeployAuthorities {
+  if (fs.existsSync(DEPLOY_AUTHORITIES_FILE)) {
+    const existing = JSON.parse(fs.readFileSync(DEPLOY_AUTHORITIES_FILE, "utf8")) as DeployAuthorities;
+    console.log(`[deploy-preprod] reusing existing deploy authorities from ${DEPLOY_AUTHORITIES_FILE}`);
+    return existing;
+  }
+  const authorities: DeployAuthorities = {
+    network: NETWORK_ID,
+    evaluatorSecretKeyHex: randomBytes(32).toString("hex"),
+    tribunalSecretKeyHex: randomBytes(32).toString("hex"),
+    issuerSecretKeyHex: randomBytes(32).toString("hex"),
+    generatedAt: new Date().toISOString(),
+  };
+  fs.mkdirSync(path.dirname(DEPLOY_AUTHORITIES_FILE), { recursive: true });
+  fs.writeFileSync(DEPLOY_AUTHORITIES_FILE, `${JSON.stringify(authorities, null, 2)}\n`, { mode: 0o600 });
+  console.log(
+    `[deploy-preprod] generated fresh deploy authority keys -> ${DEPLOY_AUTHORITIES_FILE}\n` +
+      "  (testnet-only, low-stakes: whoever runs the evaluator/tribunal/issuer\n" +
+      "  roles for this deployment will need the matching secret from that file)",
+  );
+  return authorities;
+}
+
 async function main(): Promise<void> {
   console.log(`[deploy-preprod] network=${NETWORK_ID}`);
 
@@ -234,11 +286,69 @@ async function main(): Promise<void> {
   console.log("[deploy-preprod] wiring providers...");
   const providers = await configureProviders(walletAndMidnightProvider);
   console.log("[deploy-preprod] providers wired.");
-  void providers;
 
-  // TODO: generate/load deploy authority keys
-  // TODO: build CompiledContract + initial private state
-  // TODO: deployContract, print address, write deployments/preprod.json
+  const authorities = loadOrCreateDeployAuthorities();
+  const evaluatorSecretKey = Uint8Array.from(Buffer.from(authorities.evaluatorSecretKeyHex, "hex"));
+  const tribunalSecretKey = Uint8Array.from(Buffer.from(authorities.tribunalSecretKeyHex, "hex"));
+  const issuerSecretKey = Uint8Array.from(Buffer.from(authorities.issuerSecretKeyHex, "hex"));
+
+  const evaluatorAuthority = CompiledZyndicateContract.pureCircuits.deriveEvaluatorKey(evaluatorSecretKey);
+  const tribunalAuthority = CompiledZyndicateContract.pureCircuits.deriveTribunalKey(tribunalSecretKey);
+  const issuerAuthority = CompiledZyndicateContract.pureCircuits.deriveIssuerKey(issuerSecretKey);
+
+  const zyndicateCompiledContract = CompiledContract.make<
+    CompiledZyndicateContract.Contract<ZyndicatePrivateState>
+  >("Zyndicate", CompiledZyndicateContract.Contract<ZyndicatePrivateState>).pipe(
+    CompiledContract.withWitnesses(witnesses),
+    CompiledContract.withCompiledFileAssets(ZK_CONFIG_PATH),
+  );
+
+  // The deployer's own private state; only the three authority secret keys
+  // are meaningful at deploy time (the constructor only discloses the
+  // hashed authorities). The rest of ZyndicatePrivateState is filled with
+  // fresh random values by createPrivateState's defaults — this deployer
+  // is not necessarily any particular principal/operator.
+  const initialPrivateState = createPrivateState({
+    evaluatorSecretKey,
+    tribunalSecretKey,
+    issuerSecretKey,
+  });
+
+  console.log("[deploy-preprod] calling deployContract (proves + balances + submits)...");
+  console.log(
+    "[deploy-preprod] if the wallet's DUST balance is still zero, this is expected to fail here " +
+      "while balancing the transaction — see the module docstring.",
+  );
+
+  const deployed = await deployContract(providers, {
+    compiledContract: zyndicateCompiledContract,
+    privateStateId: PRIVATE_STATE_ID,
+    initialPrivateState,
+    args: [evaluatorAuthority, tribunalAuthority, issuerAuthority],
+  });
+
+  const contractAddress = deployed.deployTxData.public.contractAddress;
+  const deployTxHash = deployed.deployTxData.public.txHash;
+  console.log(`[deploy-preprod] DEPLOYED. contractAddress=${contractAddress}`);
+
+  fs.mkdirSync(path.dirname(DEPLOYMENT_OUTPUT_FILE), { recursive: true });
+  fs.writeFileSync(
+    DEPLOYMENT_OUTPUT_FILE,
+    `${JSON.stringify(
+      {
+        network: NETWORK_ID,
+        contractAddress,
+        deployTxHash,
+        deployedAt: new Date().toISOString(),
+        evaluatorAuthorityKeyRef: `${DEPLOY_AUTHORITIES_FILE}#evaluatorSecretKeyHex`,
+        tribunalAuthorityKeyRef: `${DEPLOY_AUTHORITIES_FILE}#tribunalSecretKeyHex`,
+        issuerAuthorityKeyRef: `${DEPLOY_AUTHORITIES_FILE}#issuerSecretKeyHex`,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  console.log(`[deploy-preprod] wrote ${DEPLOYMENT_OUTPUT_FILE}`);
 }
 
 main().catch((err) => {
