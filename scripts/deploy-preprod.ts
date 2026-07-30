@@ -42,8 +42,22 @@ import {
 } from "@midnight-ntwrk/wallet-sdk-unshielded-wallet";
 import { setNetworkId, getNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 import { ttlOneHour } from "@midnight-ntwrk/midnight-js-utils";
-import type { UnboundTransaction } from "@midnight-ntwrk/midnight-js-types";
+import type { UnboundTransaction, MidnightProviders } from "@midnight-ntwrk/midnight-js-types";
 import type { FinalizedTransaction } from "@midnight-ntwrk/midnight-js-protocol/ledger";
+
+import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
+import { httpClientProofProvider } from "@midnight-ntwrk/midnight-js-http-client-proof-provider";
+import { levelPrivateStateProvider } from "@midnight-ntwrk/midnight-js-level-private-state-provider";
+import { NodeZkConfigProvider } from "@midnight-ntwrk/midnight-js-node-zk-config-provider";
+
+import type { ZyndicatePrivateState } from "../contracts/witnesses.js";
+import type { Contract as ZyndicateContract } from "../contracts/managed/zyndicate/contract/index.js";
+
+type ZyndicateCircuits = Exclude<
+  keyof ZyndicateContract<ZyndicatePrivateState>["impureCircuits"],
+  number | symbol
+>;
+type ZyndicateProviders = MidnightProviders<ZyndicateCircuits, typeof PRIVATE_STATE_ID, ZyndicatePrivateState>;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -170,6 +184,42 @@ async function createWalletAndMidnightProvider(ctx: DeployWallet) {
   };
 }
 
+// ----------------------------------------------------------------------------
+// Providers — the six-slot MidnightProviders, per the midnight-dev dapp
+// skill's Node-CLI assembly pattern.
+// ----------------------------------------------------------------------------
+
+async function configureProviders(
+  walletAndMidnightProvider: Awaited<ReturnType<typeof createWalletAndMidnightProvider>>,
+): Promise<ZyndicateProviders> {
+  const zkConfigProvider = new NodeZkConfigProvider<ZyndicateCircuits>(ZK_CONFIG_PATH);
+  const accountId = walletAndMidnightProvider.getCoinPublicKey();
+  // Password policy (midnight-js-level-private-state-provider): >=16 chars,
+  // >=3 character classes, no long runs/sequences. base64-of-hex plus a
+  // trailing symbol reliably satisfies this for any accountId.
+  const storagePassword = `${Buffer.from(accountId, "hex").toString("base64")}!`;
+
+  fs.mkdirSync(PRIVATE_STATE_DB_PATH, { recursive: true });
+
+  return {
+    privateStateProvider: levelPrivateStateProvider<typeof PRIVATE_STATE_ID, ZyndicatePrivateState>({
+      midnightDbName: PRIVATE_STATE_DB_PATH,
+      privateStateStoreName: "zyndicate-private-state",
+      accountId,
+      privateStoragePasswordProvider: () => storagePassword,
+    }),
+    // No explicit webSocketImpl: relies on the globalThis.WebSocket polyfill
+    // set at the top of this file (avoids a dual-package-type mismatch
+    // between "ws"'s `export =` type and its synthesized ESM default).
+    publicDataProvider: indexerPublicDataProvider(INDEXER_HTTP_URL, INDEXER_WS_URL),
+    zkConfigProvider,
+    // v4: zkConfigProvider is the SECOND argument.
+    proofProvider: httpClientProofProvider(PROOF_SERVER_URL, zkConfigProvider),
+    walletProvider: walletAndMidnightProvider,
+    midnightProvider: walletAndMidnightProvider,
+  };
+}
+
 async function main(): Promise<void> {
   console.log(`[deploy-preprod] network=${NETWORK_ID}`);
 
@@ -181,7 +231,11 @@ async function main(): Promise<void> {
     `[deploy-preprod] unshielded synced. coinPublicKey=${walletAndMidnightProvider.getCoinPublicKey()}`,
   );
 
-  // TODO: wire providers
+  console.log("[deploy-preprod] wiring providers...");
+  const providers = await configureProviders(walletAndMidnightProvider);
+  console.log("[deploy-preprod] providers wired.");
+  void providers;
+
   // TODO: generate/load deploy authority keys
   // TODO: build CompiledContract + initial private state
   // TODO: deployContract, print address, write deployments/preprod.json
