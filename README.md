@@ -102,6 +102,52 @@ Pure derivation circuits (also used client-side through the generated API):
 `deriveBidCommitment` — each with a unique `pad(32, "zyndicate:...")`
 domain separator.
 
+## Public state vs private witness
+
+Compact has two kinds of contract-level declarations, and confusing them is
+the easiest way to leak something that was supposed to stay confidential.
+
+**`export ledger`** declares on-chain state — replicated by every node,
+readable by anyone through the indexer, permanent. This contract's ledger
+holds only enums, counters, deadlines, hashes, and commitments, e.g.:
+
+```
+export ledger mandateStates: Map<Field, MandateState>;   // which state each mandate is in — fine to be public
+export ledger bidRegistry: Map<Bytes<32>, Field>;         // commitments only, never a price or a method
+export ledger bidNullifiers: Set<Bytes<32>>;               // proves "a bid was spent" without saying whose
+```
+
+**`witness`** declares a function the *caller's own machine* answers at proof
+time — never sent to the network, never seen by anyone else, not even
+recorded in the transaction. It supplies the private inputs a circuit reasons
+about locally before deciding what (if anything) is safe to disclose:
+
+```
+witness operatorCredentialSecret(): Bytes<32>;
+witness credentialPath(): MerkleTreePath<10, Bytes<32>>;
+```
+
+`submitBid` shows the two working together. The operator's witnesses supply
+a credential secret and its Merkle path; the circuit checks that path proves
+membership in the public `credentialRegistry` **without the circuit, the
+chain, or the principal ever learning which credential it was** — only that
+a valid, not-yet-used one exists:
+
+```
+const credential = operatorCredentialSecret();      // private: read from this machine only
+const path = credentialPath();                      // private: this machine's proof of membership
+assert(path.leaf == deriveCredentialHash(credential), "...");
+assert(credentialRegistry.checkRoot(disclose(merkleTreePathRoot<10, Bytes<32>>(path))), "...");
+```
+
+A witness result is never trusted on its word — every witness value above is
+immediately constrained by an `assert` against real ledger state, because a
+local function can return anything. And a value only crosses from private to
+public through an explicit `disclose(...)` call at the exact line it happens,
+so the boundary between "known only to me" and "known to everyone" is always
+a single, greppable keyword rather than an implicit default. `SECURITY.md`
+audits every `disclose()` call in this contract by name.
+
 ## Privacy model mapping
 
 Visibility classes from PRD 13.1. Everything on the ledger is Class A by
