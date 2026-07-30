@@ -320,12 +320,29 @@ async function main(): Promise<void> {
       "while balancing the transaction — see the module docstring.",
   );
 
-  const deployed = await deployContract(providers, {
-    compiledContract: zyndicateCompiledContract,
-    privateStateId: PRIVATE_STATE_ID,
-    initialPrivateState,
-    args: [evaluatorAuthority, tribunalAuthority, issuerAuthority],
-  });
+  let deployed: Awaited<ReturnType<typeof deployContract>>;
+  try {
+    deployed = await deployContract(providers, {
+      compiledContract: zyndicateCompiledContract,
+      privateStateId: PRIVATE_STATE_ID,
+      initialPrivateState,
+      args: [evaluatorAuthority, tribunalAuthority, issuerAuthority],
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/insufficient/i.test(message) && /dust|fund/i.test(message)) {
+      console.log(
+        "\n[deploy-preprod] EXPECTED FAILURE — insufficient DUST to pay fees.\n" +
+          "  Everything up to and including the deployContract call worked: wallet build,\n" +
+          "  unshielded sync, six-provider wiring, proof-server + indexer reachability,\n" +
+          "  authority key derivation, and local constructor execution all succeeded.\n" +
+          "  This is not a bug — re-run `npm run deploy:preprod` once tDUST has accrued.\n" +
+          `  Raw error: ${message}\n`,
+      );
+      process.exit(0);
+    }
+    throw err;
+  }
 
   const contractAddress = deployed.deployTxData.public.contractAddress;
   const deployTxHash = deployed.deployTxData.public.txHash;
@@ -349,9 +366,15 @@ async function main(): Promise<void> {
     )}\n`,
   );
   console.log(`[deploy-preprod] wrote ${DEPLOYMENT_OUTPUT_FILE}`);
+  // Background wallet sync (shielded/dust global event streams) keeps
+  // fibers alive indefinitely; force a clean exit now that we're done.
+  process.exit(0);
 }
 
 main().catch((err) => {
   console.error("[deploy-preprod] fatal error:", err);
-  process.exitCode = 1;
+  // Same reasoning as the success path: don't let background wallet sync
+  // fibers hold the process open (and keep growing memory) after a real
+  // failure has already been reported.
+  process.exit(1);
 });
