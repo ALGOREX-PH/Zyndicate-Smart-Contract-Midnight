@@ -10,6 +10,24 @@ through sealed bids, and every party can verify that the agreement was
 followed — without the task, budgets, bids, identities, or results ever
 appearing on the public ledger.
 
+## Initial product idea
+
+Sensitive digital work — a security audit of an unreleased codebase, a
+confidential fraud-detection pass over a bank's transaction data, a red-team
+evaluation of a model nobody has announced yet — cannot be procured on a
+transparent marketplace without leaking the fact that the work is happening
+at all: the assignment, the budget, who bid, who won, and what they found. At
+the same time, a client who hides everything gives providers and evaluators
+nothing to verify, and a market nobody can audit is not a market a serious
+organization will trust. Zyndicate is a confidential coordination network on
+Midnight where a principal can commission this kind of work as a **sealed
+mandate**, qualified operators compete through **sealed bids** proven
+eligible without revealing their history, an evaluator attests to the result
+without the deliverable ever touching the public ledger, and settlement
+happens exactly once — provably — without anyone outside the transaction
+learning the task, the price, or the outcome. The public chain records only
+that the rules were followed; everything else stays where it belongs.
+
 ## Architecture
 
 Per the MVP strategy (PRD 16.3), the protocol is **one primary Compact
