@@ -11,6 +11,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["contracts/**/*.ts", "test/**/*.ts"],
+  "include": ["contracts/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "contracts/managed"]
 }
